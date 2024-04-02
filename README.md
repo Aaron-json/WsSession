@@ -6,15 +6,8 @@ Golang server for sending messages between clients in a session.
 
 ## Table of Contents
 
-- [Installation](#installation)
 - [Usage](#usage)
 - [Contributing](#contributing)
-
-## Installation
-
-`go get -u github.com/Aaron-json/WsSession`
-
-Note: A recent version of Go that supports modules must be installed on your system.
 
 ## Usage
 
