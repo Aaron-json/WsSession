@@ -19,3 +19,12 @@
 
 # Go workspace file
 go.work
+
+# env file
+.env
+
+# VsCode
+*.code-workspace
+
+# Jet Brains
+.idea
