@@ -1,5 +1,11 @@
 package controllers
 
+import (
+	"encoding/json"
+
+	"github.com/Aaron-json/WsSession/internal/pkg/client"
+)
+
 type MessageType int
 
 const (
@@ -10,6 +16,12 @@ const (
 	MEMBER_LEFT MessageType = 4
 )
 
+type Packet struct {
+	SessionID string      `json:"sessionID"`
+	Message   Message     `json:"message"`
+	Type      MessageType `json:"type"`
+}
+
 type Message struct {
 	Id        string  `json:"id"`
 	Data      *string `json:"data"` // control messages do not have data
@@ -18,23 +30,32 @@ type Message struct {
 	Username  string  `json:"username"`
 }
 
-func SendMessage(p *Packet, c *Client) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if !c.open {
-		// sender's client is destroyed before message is sent
+func HandleMessage(c *client.Client, data []byte) {
+	p := Packet{}
+	err := json.Unmarshal(data, &p)
+	if err != nil {
+		p.Type = SEND_ERR
+		json.NewEncoder(c).Encode(&p)
 		return
 	}
+	switch p.Type {
+	case SEND:
+		Broadcast(c, &p)
+	}
+}
+
+// Sends a message to all other clients in the session
+func Broadcast(c *client.Client, p *Packet) {
 	ses, err := SessionPool.Get(p.SessionID)
 	if err != nil {
 		p.Type = SEND_ERR
-		c.Send <- p
+		json.NewEncoder(c).Encode(p)
 		return
 	}
 	// send to all members in the session
 	for _, member := range ses.clients {
 		if member.CID != c.CID {
-			member.SendMessage(p)
+			json.NewEncoder(member).Encode(p)
 		}
 	}
 }

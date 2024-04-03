@@ -22,6 +22,9 @@ func (p *Pool[K, V]) Delete(key K) {
 	defer p.mu.Unlock()
 	delete(p.values, key)
 }
+
+// Store() guarantees that on error, no change will be made to the
+// pool
 func (p *Pool[K, V]) Store(key K, value V) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()

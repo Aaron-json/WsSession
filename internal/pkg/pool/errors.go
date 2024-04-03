@@ -17,7 +17,7 @@ func (e PoolError) String() string {
 	case KEY_NOT_FOUND:
 		return "Key does not exist in the pool"
 	default:
-		return "Unknown Error"
+		return "Unspecified Error"
 	}
 }
 
