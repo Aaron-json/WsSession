@@ -154,20 +154,20 @@ func HandleClientClose(c *client.Client) error {
 		return nil
 	}
 	ses.clients = slices.Delete(ses.clients, idx, idx+1)
+	p := &Packet{
+		SessionID: c.SID,
+		Type:      MEMBER_LEFT,
+		Message: Message{
+			Id:        uuid.NewString(),
+			Timestamp: time.Now().Unix(),
+			From:      c.CID,
+			Data:      nil,
+		},
+	}
 	for _, member := range ses.clients {
-		if member.CID == c.CID {
-			continue
+		if member.CID != c.CID {
+			json.NewEncoder(member).Encode(p)
 		}
-		json.NewEncoder(member).Encode(&Packet{
-			SessionID: member.SID,
-			Type:      MEMBER_LEFT,
-			Message: Message{
-				Id:        uuid.NewString(),
-				Timestamp: time.Now().Unix(),
-				From:      member.CID,
-				Data:      nil,
-			},
-		})
 	}
 	return nil
 }
