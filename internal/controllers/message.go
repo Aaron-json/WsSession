@@ -52,6 +52,8 @@ func Broadcast(c *client.Client, p *Packet) {
 		json.NewEncoder(c).Encode(p)
 		return
 	}
+	ses.mu.RLock()
+	defer ses.mu.RUnlock()
 	// send to all members in the session
 	for _, member := range ses.clients {
 		if member.CID != c.CID {

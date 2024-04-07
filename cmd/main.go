@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 
@@ -26,15 +25,14 @@ func main() {
 	port := os.Getenv("PORT")
 	addr := "127.0.0.1"
 
-	l, err := net.Listen("tcp", fmt.Sprintf("%s:%s", addr, port))
-	if err != nil {
-		log.Panicln(err)
+	s := &http.Server{
+		Handler: mux,
+		Addr:    fmt.Sprint(addr, ":", port),
 	}
 	if os.Getenv("ENV") != "production" {
-		log.Printf("Server listening")
+		log.Printf("Server starting")
 	}
-
-	if err := http.Serve(l, mux); err != nil {
+	if err := s.ListenAndServe(); err != nil {
 		log.Panicln(err)
 	}
 }

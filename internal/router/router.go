@@ -13,6 +13,7 @@ func Router(mux *chi.Mux) {
 
 	mux.Group(func(r chi.Router) {
 		// r.Use(auth.ParseAcessToken)
+		// ws protocol requires Get connection
 		r.Get("/new-session/{sessionName}", controllers.CreateNewSession)
 		r.Get("/join-session/{sessionID}", controllers.JoinSession)
 	})

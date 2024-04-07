@@ -1,6 +1,9 @@
 package test
 
 import (
+	"bufio"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -17,6 +20,11 @@ import (
 
 var HOST string
 
+type TestClient struct {
+	conn *websocket.Conn
+	id   string
+}
+
 func TestMain(m *testing.M) {
 	err := godotenv.Load("../.env")
 	if err != nil {
@@ -26,64 +34,99 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestCreateSession(t *testing.T) {
+func TestSessions(t *testing.T) {
+	nSessions := 1000
+	testsWg := &sync.WaitGroup{}
+	testsWg.Add(nSessions)
+	loggersWg := &sync.WaitGroup{}
+	loggersWg.Add(2)
+	errCh := make(chan []byte, 10)
+	outCh := make(chan []byte, 10)
+	go Logger(errCh, "session_test_err.log", loggersWg)
+	go Logger(outCh, "session_test.log", loggersWg)
+	t.Log("Starting session test")
+	for range nSessions {
+		go testSession(outCh, errCh, testsWg)
+	}
+	t.Log("waiting for tests")
+	testsWg.Wait()
+	close(errCh)
+	close(outCh)
+	t.Log("waiting for loggers")
+	// wait for error logger to write and close the file
+	loggersWg.Wait()
+}
+func testSession(stdout chan []byte, stderr chan []byte, wg *sync.WaitGroup) {
+	defer wg.Done()
 	nClients := 5
-	conns := make([]*websocket.Conn, 0, nClients)
-	url1 := url.URL{Scheme: "ws", Host: HOST, Path: "/new-session/TestSession"}
-	ownerConn, _, err := websocket.DefaultDialer.Dial(url1.String(), nil)
+	conns := make([]TestClient, 0, nClients)
+	listenWg := &sync.WaitGroup{}
+	ownerConn, code, err := createSession()
 	if err != nil {
-		t.Fatal(err)
+		stderr <- []byte(err.Error())
+		return
 	}
-	res := controllers.InitialRes{}
-	err = ownerConn.ReadJSON(&res)
-	if err != nil {
-		t.Fatal(err)
-	}
+	listenWg.Add(1)
+	go Listen(ownerConn, stdout, stderr, listenWg)
 	conns = append(conns, ownerConn)
-	for range nClients - 1 { // the owner is already in the session
+	// wait for connection listeners to be ready to close
+	for range nClients - 1 { // owner is already in session
 		// create connections to join the connection
-		url2 := url.URL{Scheme: "ws", Host: HOST, Path: fmt.Sprint("/join-session/", res.Code)}
-		client, _, err := websocket.DefaultDialer.Dial(url2.String(), nil)
+		client, err := joinSession(code)
 		if err != nil {
-			t.Fatal(err)
+			stderr <- []byte(err.Error())
+			continue
 		}
+		listenWg.Add(1)
+		go Listen(client, stdout, stderr, listenWg)
+
 		conns = append(conns, client)
 	}
-
-	wg := &sync.WaitGroup{} // wait for listeners to close
-	wg.Add(nClients)
-	for _, conn := range conns {
-		// in total listener should log [(nClients - 1) * messagesSent] messages for every message sent
-		// by the writer. Messeges should reduce with every write since the connection is closed after we are
-		// done writing to it.
-		go Listen(conn, wg)
-	}
 	for i, conn := range conns {
-		t.Log("Testing client: ", i+1)
-		Write(conn, res.Code)
-		// give readers time to print all the written messages they received
-		time.Sleep(time.Second * 2)
+		stdout <- []byte(fmt.Sprint("Testing client: ", i+1))
+		Write(conn, code, stdout, stderr)
+		time.Sleep(time.Second)
 	}
-	wg.Wait()
+	listenWg.Wait()
+
 }
 
-func Listen(c *websocket.Conn, wg *sync.WaitGroup) {
+func Logger(logCh chan []byte, filename string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	fp, err := os.Create(filename)
+	if err != nil {
+		panic("Could not create log file.")
+	}
+	defer fp.Close()
+	bw := bufio.NewWriter(fp)
+	defer bw.Flush()
+	for val := range logCh {
+		bw.Write(val)
+		bw.WriteByte('\n')
+	}
+}
+
+func Listen(c TestClient, stdout chan []byte, stderr chan []byte, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for {
-		msgType, data, err := c.ReadMessage()
-		if err != nil || msgType == websocket.CloseMessage {
+		msgType, data, err := c.conn.ReadMessage()
+		if err != nil {
+			stderr <- []byte(fmt.Sprint("Error listening on client id: ", c.id, " Error: ", err.Error()))
 			break
 		}
-		log.Println(string(data))
+		if msgType == websocket.CloseMessage {
+			break
+		}
+		stdout <- data
 	}
 }
 
-func Write(c *websocket.Conn, code string) {
+func Write(c TestClient, code string, stdout chan []byte, stderr chan []byte) {
 	defer func() {
-		c.Close()
+		c.conn.Close()
 	}()
 	msgTicker := time.NewTicker(time.Millisecond * 500)
-	endTimer := time.NewTimer(time.Second * 4)
+	endTimer := time.NewTimer(time.Second * 2)
 	for {
 		select {
 		case <-msgTicker.C:
@@ -97,10 +140,76 @@ func Write(c *websocket.Conn, code string) {
 					Id:        uuid.NewString(),
 				},
 			}
-			c.WriteJSON(&p)
+			err := c.conn.WriteJSON(&p)
+			if err != nil {
+				stderr <- []byte(fmt.Sprint("Error writing on client id: ", c.id, " Error: ", err.Error()))
+
+			}
 		case <-endTimer.C:
 			msgTicker.Stop()
 			return
 		}
 	}
+}
+
+// Returns the client after creating the session, the session code
+// of an error.
+func createSession() (TestClient, string, error) {
+	client, err := WsDial("/new-session/TestSession")
+	if err != nil {
+		return TestClient{}, "", err
+	}
+	res := controllers.HandshakeRes{}
+	// read control message containing the session code+
+	_, data, err := client.conn.ReadMessage()
+	if err != nil {
+		client.conn.Close()
+		return TestClient{}, "", err
+	}
+	err = json.Unmarshal(data, &res)
+	if err != nil {
+		client.conn.Close()
+		return TestClient{}, "", err
+	}
+	if res.StatusCode != 200 {
+		client.conn.Close()
+		return TestClient{}, "", errors.New(res.Status)
+	}
+	return client, res.SessionCode, nil
+
+}
+
+func joinSession(code string) (TestClient, error) {
+	client, err := WsDial(fmt.Sprint("/join-session/", code))
+	if err != nil {
+		return TestClient{}, err
+	}
+	res := controllers.HandshakeRes{}
+	// read control message containing the session code+
+	_, data, err := client.conn.ReadMessage()
+	if err != nil {
+		client.conn.Close()
+		return TestClient{}, err
+	}
+	err = json.Unmarshal(data, &res)
+	if err != nil {
+		client.conn.Close()
+		return TestClient{}, err
+	}
+	if res.StatusCode != 200 {
+		return TestClient{}, errors.New(res.Status)
+	}
+	return client, nil
+}
+
+func WsDial(endpoint string) (TestClient, error) {
+	url2 := url.URL{Scheme: "ws", Host: HOST, Path: endpoint}
+	conn, _, err := websocket.DefaultDialer.Dial(url2.String(), nil)
+	if err != nil {
+		return TestClient{}, err
+	}
+	return TestClient{
+		conn: conn,
+		id:   uuid.NewString(),
+	}, nil
 }

@@ -57,10 +57,10 @@ func NewClient(w http.ResponseWriter, r *http.Request, conf ClientConfig) (*Clie
 	return c, nil
 }
 
+// Attempts to close the client as soon as possible.
 // Called automatically when the session is closed or when a close message is
-// sent to this client. Can also be invoked manually. A client whose Start()
-// method has not yet been called does not have to be ended. The client must NOT call
-// start more than once in any case.
+// sent to this client. Can also be invoked manually. End must NOT be called
+// more than once.
 func (c *Client) End() {
 	// close connection and channel to make sure the listen and write
 	// goroutines stop blocking.
@@ -69,9 +69,10 @@ func (c *Client) End() {
 	}
 	c.mu.Lock()
 	c.open = false
+	c.mu.Unlock()
+
 	c.conn.Close()
 	close(c.send)
-	c.mu.Unlock()
 
 	c.handleClose(c)
 }
@@ -93,9 +94,9 @@ func (c *Client) writer() {
 	}
 }
 
-// Begins receiving from and writing to the connection. Takes an onStart() function parameter.
-// The onStart() function is ran before the client starts listening and accepting writing to the connection.
-// Useful for performing an action before other messages can be sent and received. ex. sending an initial message before allowing other messages to be sent.
+// Begins receiving from and writing to the connection. Takes an optional first message parameter.
+// The message is sent before the client starts listening and accepting writing to the connection.
+// Useful for performing an action before other messages can be sent and received. ex. sending an initial control message.
 func (c *Client) Start(msg []byte) {
 	if c.open {
 		return
@@ -104,20 +105,16 @@ func (c *Client) Start(msg []byte) {
 	defer c.mu.Unlock()
 	go c.listener()
 	go c.writer()
-	c.write(msg)
+	// send initial
+	if msg != nil {
+		c.send <- msg
+	}
 	c.open = true
-}
-
-//	Methods attempts to write to the channel regardless of the state.
-//
-// Caller is responsible for checking the client state before calling this method.
-func (c *Client) write(p []byte) {
-	c.send <- p
 }
 
 // Implements the Writer interface.
 // This method either sends the whole message, or nothing. ie on successful write, n == len(p).
-// Messeges sent before Start() or after End() methods will return an error and len == 0
+// Messeges sent before Start() or after End() methods will return an error and len == 0 and will be ignored.
 func (c *Client) Write(p []byte) (n int, err error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

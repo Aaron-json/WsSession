@@ -10,11 +10,11 @@ type Pool[K comparable, V any] struct {
 	max    int
 }
 
-func NewPool[K comparable, V any]() *Pool[K, V] {
+func NewPool[K comparable, V any](max int) *Pool[K, V] {
 	return &Pool[K, V]{
 		mu:     sync.RWMutex{},
 		values: make(map[K]V),
-		max:    1000,
+		max:    max,
 	}
 }
 func (p *Pool[K, V]) Delete(key K) {
@@ -50,20 +50,21 @@ func (p *Pool[K, V]) Update(key K, value V) error {
 	p.values[key] = value
 	return nil
 }
-func (p *Pool[K, V]) Get(sessionID K) (V, error) {
+
+func (p *Pool[K, V]) Get(key K) (V, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	val, ok := p.values[sessionID]
+	val, ok := p.values[key]
 	if !ok {
 		return *new(V), KEY_NOT_FOUND
 	}
 	return val, nil
 }
 
-func (p *Pool[K, V]) Exists(sessionID K) bool {
+func (p *Pool[K, V]) Exists(key K) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	_, ok := p.values[sessionID]
+	_, ok := p.values[key]
 	return ok
 }
 

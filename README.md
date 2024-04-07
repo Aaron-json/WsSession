@@ -15,7 +15,7 @@ Go websocket server for sending messages between clients in a session.
 
 2. Start the server by running the executable.
 
-3. Send a ws handshake to start a session on the server. When creating or joining a session, the first message sent on the connection signals the connection is ready to receive messages; however, the session code is only sent when creating the session.
+3. Send a ws handshake to start a session on the server. When creating or joining a session, the first message sent on the connection is a control message containing the status of your connection. On error, you have 5 seconds to read the message then the connection is closed.
 
 4. Use this code to connect other clients to the same session and share messages.
 

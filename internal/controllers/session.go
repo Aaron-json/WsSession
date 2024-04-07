@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/Aaron-json/WsSession/internal/pkg/client"
@@ -14,82 +15,125 @@ import (
 	"github.com/google/uuid"
 )
 
-type InitialRes struct {
-	Code   string `json:"code,omitempty"`
-	Status string `json:"status"`
+type HandshakeRes struct {
+	SessionCode string `json:"sessionCode,omitempty"`
+	StatusCode  int    `json:"statusCode"`
+	Status      string `json:"status"`
 }
 type Session struct {
 	Name    string
 	clients []*client.Client
+	mu      sync.RWMutex
 }
 
-var SessionPool = pool.NewPool[string, Session]()
+const (
+	MAX_SESSIONS          int = 500
+	MAX_USERS_PER_SESSION int = 5
+)
 
-const MAX_USERS_PER_SESSION = 5
+var SessionPool = pool.NewPool[string, *Session](MAX_SESSIONS)
 
 func CreateNewSession(w http.ResponseWriter, r *http.Request) {
 	sessionName := chi.URLParam(r, "sessionName")
 
-	code := code.Generate()
 	c, err := client.NewClient(w, r, client.ClientConfig{
+		// init without sesssion code
 		HandleClose:   func(c *client.Client) { HandleClientClose(c) },
 		HandleMessage: HandleMessage,
-		SID:           code,
 	})
 	if err != nil {
+		// handshake unsuccessful
 		return
 	}
-	// create the session in the pool
-	err = SessionPool.Store(code, Session{
+	newSession := &Session{
 		Name:    sessionName,
 		clients: append(make([]*client.Client, 0, MAX_USERS_PER_SESSION), c),
-	})
-	if err != nil {
-		// could not add to pool.
-		return
+		mu:      sync.RWMutex{},
 	}
-	initialMsg, err := json.Marshal(&InitialRes{
-		Code:   code,
-		Status: "Opened",
-	})
-	if err != nil {
-		return
+	res := HandshakeRes{}
+	var sessionCode string
+	for {
+		// find unused code
+		sessionCode = code.Generate(7)
+		err = SessionPool.Store(sessionCode, newSession)
+		if err == nil {
+			c.SID = sessionCode
+			res.SessionCode = sessionCode
+			res.StatusCode = 200
+			res.Status = "Success"
+			break
+		} else if err == pool.DUPLICATE_KEY {
+			continue
+		} else if err == pool.MAX_CAPACITY {
+			res.StatusCode = 507
+			res.Status = "Server is full"
+			break
+		} else {
+			res.StatusCode = 500
+			res.Status = "Server Error"
+			break
+		}
 	}
-	c.Start(initialMsg)
+
+	resJson, err := json.Marshal(&res)
+	if err != nil {
+		c.End()
+	} else if res.StatusCode != 200 {
+		c.Start(resJson)
+		// give user time to read the control message
+		time.Sleep(time.Second * 5)
+		c.End()
+	} else {
+		c.Start(resJson)
+	}
 }
 
 func JoinSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionID")
-	ses, err := SessionPool.Get(sessionID)
-	if err != nil { // if exists
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("Session does not exist"))
-		return
-	}
-	if len(ses.clients) == MAX_USERS_PER_SESSION {
-		w.WriteHeader(http.StatusInsufficientStorage)
-		return
-	}
 	c, err := client.NewClient(w, r, client.ClientConfig{
 		HandleClose:   func(c *client.Client) { HandleClientClose(c) },
 		HandleMessage: HandleMessage,
 		SID:           sessionID,
 	})
-	if err != nil { // NewClient() will write err message to response
+	if err != nil { // handshake failed
 		return
 	}
-	ses.clients = append(ses.clients, c)
-	err = SessionPool.Update(sessionID, ses)
+	res := HandshakeRes{}
+	ses, err := SessionPool.Get(sessionID)
 	if err != nil {
-		return
+		if err == pool.KEY_NOT_FOUND {
+			res.StatusCode = 404
+			res.Status = "Could not find session"
+		} else {
+			res.StatusCode = 500
+			res.Status = "Server Error"
+		}
+	} else {
+		ses.mu.Lock()
+		if len(ses.clients) == MAX_USERS_PER_SESSION {
+			res.StatusCode = 507
+			res.Status = "Session is full"
+		} else {
+			// no error when retrieving session
+			ses.clients = append(ses.clients, c)
+			// no error adding to pool
+			res.StatusCode = 200
+			res.Status = "Success"
+		}
+		ses.mu.Unlock()
 	}
-	initialMsg, err := json.Marshal(&InitialRes{
-		Status: "Opened",
-	})
+
+	resJson, err := json.Marshal(&res)
 	if err != nil {
-		return
+		c.End()
+	} else if res.StatusCode != 200 {
+		c.Start(resJson)
+		// give user time to read the control message
+		time.Sleep(time.Second * 5)
+		c.End()
+	} else {
+		c.Start(resJson)
 	}
-	c.Start(initialMsg)
 }
 
 func HandleClientClose(c *client.Client) error {
@@ -97,6 +141,8 @@ func HandleClientClose(c *client.Client) error {
 	if err != nil {
 		return errors.New("Session does not exist")
 	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
 	idx := slices.IndexFunc(ses.clients, func(v *client.Client) bool {
 		return v.CID == c.CID
 	})
@@ -108,7 +154,6 @@ func HandleClientClose(c *client.Client) error {
 		return nil
 	}
 	ses.clients = slices.Delete(ses.clients, idx, idx+1)
-	SessionPool.Update(c.SID, ses)
 	for _, member := range ses.clients {
 		if member.CID == c.CID {
 			continue

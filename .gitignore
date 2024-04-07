@@ -28,3 +28,6 @@ go.work
 
 # Jet Brains
 .idea
+
+# log files
+*.log
