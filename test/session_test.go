@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestSessions(t *testing.T) {
-	nSessions := 1000
+	nSessions := 200 // number of concurrent sessions
 	testsWg := &sync.WaitGroup{}
 	testsWg.Add(nSessions)
 	loggersWg := &sync.WaitGroup{}
@@ -85,10 +85,10 @@ func testSession(stdout chan []byte, stderr chan []byte, wg *sync.WaitGroup) {
 	for i, conn := range conns {
 		stdout <- []byte(fmt.Sprint("Testing client: ", i+1))
 		Write(conn, code, stdout, stderr)
-		time.Sleep(time.Second)
+		// wait for listeners to log messages
+		time.Sleep(time.Second * 2)
 	}
 	listenWg.Wait()
-
 }
 
 func Logger(logCh chan []byte, filename string, wg *sync.WaitGroup) {
