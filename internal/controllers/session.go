@@ -164,9 +164,13 @@ func HandleClientClose(c *client.Client) error {
 			Data:      nil,
 		},
 	}
+	pJson, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
 	for _, member := range ses.clients {
 		if member.CID != c.CID {
-			json.NewEncoder(member).Encode(p)
+			member.Write(pJson)
 		}
 	}
 	return nil

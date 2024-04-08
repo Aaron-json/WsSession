@@ -85,8 +85,6 @@ func testSession(stdout chan []byte, stderr chan []byte, wg *sync.WaitGroup) {
 	for i, conn := range conns {
 		stdout <- []byte(fmt.Sprint("Testing client: ", i+1))
 		Write(conn, code, stdout, stderr)
-		// wait for listeners to log messages
-		time.Sleep(time.Second * 2)
 	}
 	listenWg.Wait()
 }

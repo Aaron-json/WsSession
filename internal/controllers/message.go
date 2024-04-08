@@ -55,9 +55,14 @@ func Broadcast(c *client.Client, p *Packet) {
 	ses.mu.RLock()
 	defer ses.mu.RUnlock()
 	// send to all members in the session
+	pJson, err := json.Marshal(p)
+	if err != nil {
+		// message is dropped if cannot marshall
+		return
+	}
 	for _, member := range ses.clients {
 		if member.CID != c.CID {
-			json.NewEncoder(member).Encode(p)
+			member.Write(pJson)
 		}
 	}
 }

@@ -55,9 +55,6 @@ func NewToken(userId string, tokenType Token) (string, error) {
 	return token.SignedString(os.Getenv("jwt_secret"))
 }
 
-// Parses the request header and adds the userID and connectionID (if available)
-// to a context value in the request. Used in private routes to get the user's id
-// for operations like database access
 func parseAcessToken(r *http.Request) (*http.Request, error) {
 
 	_, userToken, found := strings.Cut(r.Header.Get("Authorization"), " ")
@@ -76,9 +73,6 @@ func parseAcessToken(r *http.Request) (*http.Request, error) {
 		return nil, err
 	}
 
-	// add the token claims to the request. do not use a pointer even though it would save copying
-	// this would make it unsafe for concurrent access. the struct is small enough that copying
-	// should be insignificant.
 	ctx := context.WithValue(r.Context(), AUTH_CONTEXT_KEY, &UserAuth{
 		UserId: claims.UserId,
 	})

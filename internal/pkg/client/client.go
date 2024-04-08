@@ -29,16 +29,16 @@ type ClientConfig struct {
 	// Called on on every message received by this client.
 	HandleMessage func(*Client, []byte)
 	// session id
-	SID        string
-	InitialMsg []byte
+	SID string
+}
+
+var upgrader = &websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
 // If an error is encountered when creating client, the method writes an error
 // to the http client automatically and returns a nil pointer and an error.
 func NewClient(w http.ResponseWriter, r *http.Request, conf ClientConfig) (*Client, error) {
-	var upgrader = &websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool { return true },
-	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	r.Body.Close()
 	if err != nil {
