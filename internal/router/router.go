@@ -9,21 +9,18 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-func Router(mux *chi.Mux) {
-
-	mux.Group(func(r chi.Router) {
-		// r.Use(auth.ParseAcessToken)
-		// ws protocol requires Get connection
-		r.Get("/new-session/{sessionName}", controllers.CreateNewSession)
-		r.Get("/join-session/{sessionID}", controllers.JoinSession)
-	})
+func NewRouter() *chi.Mux {
+	r := chi.NewRouter()
+	r.Get("/new-session/{sessionName}", controllers.CreateNewSession)
+	r.Get("/join-session/{sessionID}", controllers.JoinSession)
 
 	// dev routes
 	if os.Getenv("ENV") != "production" {
-		mux.HandleFunc("/debug/pprof/", pprof.Index)
-		mux.HandleFunc("/debug/pprof/*", func(w http.ResponseWriter, r *http.Request) {
+		r.HandleFunc("/debug/pprof/", pprof.Index)
+		r.HandleFunc("/debug/pprof/*", func(w http.ResponseWriter, r *http.Request) {
 			profile := chi.URLParam(r, "*")
 			pprof.Handler(profile).ServeHTTP(w, r)
 		})
 	}
+	return r
 }

@@ -31,3 +31,10 @@ go.work
 
 # log files
 *.log
+
+# img, png
+*.jpg
+*.png
+
+# allow sample test file
+!sample_file.jpg

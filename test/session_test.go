@@ -5,20 +5,25 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Aaron-json/WsSession/internal/controllers"
+	"github.com/Aaron-json/WsSession/internal/pkg/client"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
 )
 
 var HOST string
+var testFileData []byte
+var testFileName = "sample_file.jpg"
 
 type TestClient struct {
 	conn *websocket.Conn
@@ -30,12 +35,22 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	HOST = fmt.Sprintf("127.0.0.1:%s", os.Getenv("PORT"))
-	os.Exit(m.Run())
+	fp, err := os.Open(testFileName)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer fp.Close()
+	testFileData, err = io.ReadAll(fp)
+	testFileName = ".jpg"
+	if err != nil {
+		log.Panic(err)
+	}
+	HOST = fmt.Sprint("127.0.0.1:", os.Getenv("PORT"))
+	m.Run()
 }
 
 func TestSessions(t *testing.T) {
-	nSessions := 200 // number of concurrent sessions
+	nSessions := 1 // number of concurrent sessions
 	testsWg := &sync.WaitGroup{}
 	testsWg.Add(nSessions)
 	loggersWg := &sync.WaitGroup{}
@@ -67,7 +82,7 @@ func testSession(stdout chan []byte, stderr chan []byte, wg *sync.WaitGroup) {
 		return
 	}
 	listenWg.Add(1)
-	go Listen(ownerConn, stdout, stderr, listenWg)
+	go BinaryReader(ownerConn, stdout, stderr, listenWg)
 	conns = append(conns, ownerConn)
 	// wait for connection listeners to be ready to close
 	for range nClients - 1 { // owner is already in session
@@ -78,13 +93,14 @@ func testSession(stdout chan []byte, stderr chan []byte, wg *sync.WaitGroup) {
 			continue
 		}
 		listenWg.Add(1)
-		go Listen(client, stdout, stderr, listenWg)
+		go BinaryReader(client, stdout, stderr, listenWg)
 
 		conns = append(conns, client)
 	}
 	for i, conn := range conns {
 		stdout <- []byte(fmt.Sprint("Testing client: ", i+1))
-		Write(conn, code, stdout, stderr)
+		BinaryWriter(conn, stdout, stderr)
+		time.Sleep(time.Second)
 	}
 	listenWg.Wait()
 }
@@ -104,7 +120,7 @@ func Logger(logCh chan []byte, filename string, wg *sync.WaitGroup) {
 	}
 }
 
-func Listen(c TestClient, stdout chan []byte, stderr chan []byte, wg *sync.WaitGroup) {
+func TextReader(c TestClient, stdout chan []byte, stderr chan []byte, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for {
 		msgType, data, err := c.conn.ReadMessage()
@@ -115,33 +131,69 @@ func Listen(c TestClient, stdout chan []byte, stderr chan []byte, wg *sync.WaitG
 		if msgType == websocket.CloseMessage {
 			break
 		}
-		stdout <- data
+		if msgType == client.TextMessage {
+			stdout <- data
+		} else {
+			stderr <- []byte(fmt.Sprint("Unsupported message type: ", msgType))
+		}
 	}
 }
 
-func Write(c TestClient, code string, stdout chan []byte, stderr chan []byte) {
-	defer func() {
-		c.conn.Close()
-	}()
-	msgTicker := time.NewTicker(time.Millisecond * 500)
-	endTimer := time.NewTimer(time.Second * 2)
+func BinaryReader(c TestClient, stdout chan []byte, stderr chan []byte, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for {
+		msgType, data, err := c.conn.ReadMessage()
+		if err != nil {
+			stderr <- []byte(fmt.Sprint("Error listening on client id: ", c.id, " Error: ", err.Error()))
+			break
+		}
+		if msgType == websocket.CloseMessage {
+			break
+		}
+		if msgType == client.BinaryMessage {
+			// attempt to recreate the sent file
+			fp, err := os.Create(fmt.Sprint(c.id, ".", strings.Split(testFileName, ".")[1]))
+			if err != nil {
+				stderr <- []byte(err.Error())
+				return
+			}
+			defer fp.Close()
+			fp.Write(data)
+
+		} else {
+			stderr <- []byte(fmt.Sprint("Unsupported message type: ", msgType))
+		}
+	}
+}
+
+func BinaryWriter(c TestClient, stdout chan []byte, stderr chan []byte) {
+	defer c.conn.Close()
+	if testFileData == nil {
+		stderr <- []byte("Write Error: File has not been initialized")
+		return
+	}
+	c.conn.WriteMessage(client.BinaryMessage, testFileData)
+}
+
+func TextWriter(c TestClient, stdout chan []byte, stderr chan []byte) {
+	defer c.conn.Close()
+	msgTicker := time.NewTicker(time.Millisecond * 200)
+	endTimer := time.NewTimer(time.Second * 1)
+	msg := "This is my message"
+	p := controllers.Message{
+		Data: msg,
+	}
+	data, err := json.Marshal(&p)
+	if err != nil {
+		// could not marshall text message
+		stderr <- []byte(fmt.Sprint("Error writing on client id: ", c.id, " Error: ", err.Error()))
+	}
 	for {
 		select {
 		case <-msgTicker.C:
-			msg := "This is my message"
-			p := controllers.Packet{
-				SessionID: code,
-				Type:      controllers.SEND,
-				Message: controllers.Message{
-					Timestamp: time.Now().Unix(),
-					Data:      &msg,
-					Id:        uuid.NewString(),
-				},
-			}
-			err := c.conn.WriteJSON(&p)
+			err := c.conn.WriteMessage(websocket.TextMessage, data)
 			if err != nil {
-				stderr <- []byte(fmt.Sprint("Error writing on client id: ", c.id, " Error: ", err.Error()))
-
+				stderr <- []byte(err.Error())
 			}
 		case <-endTimer.C:
 			msgTicker.Stop()
@@ -157,13 +209,14 @@ func createSession() (TestClient, string, error) {
 	if err != nil {
 		return TestClient{}, "", err
 	}
-	res := controllers.HandshakeRes{}
+	res := controllers.HandshakeMessage{}
 	// read control message containing the session code+
 	_, data, err := client.conn.ReadMessage()
 	if err != nil {
 		client.conn.Close()
 		return TestClient{}, "", err
 	}
+
 	err = json.Unmarshal(data, &res)
 	if err != nil {
 		client.conn.Close()
@@ -182,13 +235,14 @@ func joinSession(code string) (TestClient, error) {
 	if err != nil {
 		return TestClient{}, err
 	}
-	res := controllers.HandshakeRes{}
+	res := controllers.HandshakeMessage{}
 	// read control message containing the session code+
 	_, data, err := client.conn.ReadMessage()
 	if err != nil {
 		client.conn.Close()
 		return TestClient{}, err
 	}
+
 	err = json.Unmarshal(data, &res)
 	if err != nil {
 		client.conn.Close()
@@ -197,12 +251,13 @@ func joinSession(code string) (TestClient, error) {
 	if res.StatusCode != 200 {
 		return TestClient{}, errors.New(res.Status)
 	}
+
 	return client, nil
 }
 
 func WsDial(endpoint string) (TestClient, error) {
-	url2 := url.URL{Scheme: "ws", Host: HOST, Path: endpoint}
-	conn, _, err := websocket.DefaultDialer.Dial(url2.String(), nil)
+	url := url.URL{Scheme: "ws", Host: HOST, Path: endpoint}
+	conn, _, err := websocket.DefaultDialer.Dial(url.String(), nil)
 	if err != nil {
 		return TestClient{}, err
 	}
