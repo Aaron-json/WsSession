@@ -134,7 +134,8 @@ func TextReader(c TestClient, stdout chan []byte, stderr chan []byte, wg *sync.W
 		if msgType == client.TextMessage {
 			stdout <- data
 		} else {
-			stderr <- []byte(fmt.Sprint("Unsupported message type: ", msgType))
+			stderr <- []byte(fmt.Sprint("Unsupported message type: Expected ", client.TextMessage, ". Received: ", msgType))
+
 		}
 	}
 }
@@ -161,7 +162,7 @@ func BinaryReader(c TestClient, stdout chan []byte, stderr chan []byte, wg *sync
 			fp.Write(data)
 
 		} else {
-			stderr <- []byte(fmt.Sprint("Unsupported message type: ", msgType))
+			stderr <- []byte(fmt.Sprint("Unsupported message type: Expected ", client.BinaryMessage, ". Received: ", msgType))
 		}
 	}
 }

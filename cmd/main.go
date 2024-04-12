@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/Aaron-json/WsSession/internal/router"
+	"github.com/Aaron-json/WsSession/internal/controllers"
 	"github.com/joho/godotenv"
 )
 
@@ -17,14 +17,12 @@ func main() {
 		log.Panicln("Error loading .env file:", err)
 	}
 	// set up routes
-	mux := router.NewRouter()
-
+	http.DefaultServeMux.HandleFunc("GET /new-session/{sessionName}", controllers.CreateNewSession)
+	http.DefaultServeMux.HandleFunc("GET /join-session/{sessionID}", controllers.JoinSession)
 	port := os.Getenv("PORT")
 	addr := "127.0.0.1"
-
 	s := &http.Server{
-		Handler: mux,
-		Addr:    fmt.Sprint(addr, ":", port),
+		Addr: fmt.Sprint(addr, ":", port),
 	}
 	if os.Getenv("ENV") != "production" {
 		log.Printf("Server starting")

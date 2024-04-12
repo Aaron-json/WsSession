@@ -11,7 +11,6 @@ import (
 	"github.com/Aaron-json/WsSession/internal/pkg/client"
 	"github.com/Aaron-json/WsSession/internal/pkg/code"
 	"github.com/Aaron-json/WsSession/internal/pkg/pool"
-	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
 
@@ -42,7 +41,7 @@ const (
 var SessionPool = pool.NewPool[string, *Session](MAX_SESSIONS)
 
 func CreateNewSession(w http.ResponseWriter, r *http.Request) {
-	sessionName := chi.URLParam(r, "sessionName")
+	sessionName := r.PathValue("sessionName")
 
 	c, err := client.NewClient(w, r)
 	if err != nil {
@@ -95,7 +94,7 @@ func CreateNewSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func JoinSession(w http.ResponseWriter, r *http.Request) {
-	sessionID := chi.URLParam(r, "sessionID")
+	sessionID := r.PathValue("sessionID")
 	c, err := client.NewClient(w, r)
 	if err != nil { // handshake failed
 		return
