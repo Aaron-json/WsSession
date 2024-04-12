@@ -151,21 +151,28 @@ func JoinSession(w http.ResponseWriter, r *http.Request) {
 	BroadcastText(newMember, &controlMsg)
 }
 
-func HandleClientClose(mem Member) error {
-
+func RemoveMemberFromSession(mem Member) error {
 	mem.Session.mu.Lock()
-	idx := slices.IndexFunc(mem.Session.Members, func(v Member) bool {
+	defer mem.Session.mu.Unlock()
+	prevLen := len(mem.Session.Members)
+	mem.Session.Members = slices.DeleteFunc(mem.Session.Members, func(v Member) bool {
 		return v.Id == mem.Id
 	})
-	if idx == -1 {
-		return errors.New("client is not in the session")
+	if prevLen == len(mem.Session.Members) {
+		return errors.New("member not found")
 	}
-	if len(mem.Session.Members) == 1 {
+	if len(mem.Session.Members) == 0 {
 		SessionPool.Delete(mem.Session.Code)
 		return nil
 	}
-	mem.Session.Members = slices.Delete(mem.Session.Members, idx, idx+1)
-	mem.Session.mu.Unlock()
+	return nil
+}
+
+func HandleClientClose(mem Member) error {
+	err := RemoveMemberFromSession(mem)
+	if err != nil {
+		return err
+	}
 	msg := ControlMessage{
 		From:    mem.Id,
 		Control: MEMBER_LEFT,
@@ -201,6 +208,8 @@ func NewMember(ses *Session, c *client.Client) Member {
 	return mem
 }
 
+// Gets the ids of the members in a session. Synchronisation is left up to the
+// caller.
 func getMemberIds(ses *Session) []string {
 	memberIds := make([]string, 0, len(ses.Members))
 	for _, member := range ses.Members {
