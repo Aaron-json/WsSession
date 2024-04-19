@@ -10,6 +10,7 @@ type Pool[K comparable, V any] struct {
 	max    int
 }
 
+// Creates a new pool. If max < 0, the returned pool is unbounded
 func NewPool[K comparable, V any](max int) *Pool[K, V] {
 	return &Pool[K, V]{
 		mu:     sync.RWMutex{},
@@ -23,6 +24,12 @@ func (p *Pool[K, V]) Delete(key K) {
 	delete(p.values, key)
 }
 
+func (p *Pool[K, V]) DeleteAll(key K) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	clear(p.values)
+}
+
 // Store() guarantees that on error, no change will be made to the
 // pool
 func (p *Pool[K, V]) Store(key K, value V) error {
@@ -31,7 +38,7 @@ func (p *Pool[K, V]) Store(key K, value V) error {
 	if _, exists := p.values[key]; exists {
 		return DUPLICATE_KEY
 	}
-	if len(p.values) >= p.max {
+	if len(p.values) >= p.max && p.max >= 0 {
 		return MAX_CAPACITY
 	}
 	p.values[key] = value

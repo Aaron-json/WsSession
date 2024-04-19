@@ -15,7 +15,7 @@ type Client struct {
 	mu            sync.RWMutex
 	open          bool
 	conn          *websocket.Conn
-	send          chan *Packet
+	sendCh        chan *Packet
 	HandleClose   CloseHandler
 	HandleMessage MessageHandler
 }
@@ -28,6 +28,8 @@ const (
 	TextMessage   = 1
 	BinaryMessage = 2
 	CloseMessage  = 8
+	PingMessage   = 9
+	PongMessage   = 10
 )
 
 var upgrader = &websocket.Upgrader{
@@ -43,10 +45,10 @@ func NewClient(w http.ResponseWriter, r *http.Request) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{
-		conn: conn,
-		send: make(chan *Packet, 15),
-		open: false,
-		mu:   sync.RWMutex{},
+		conn:   conn,
+		sendCh: make(chan *Packet, 15),
+		open:   false,
+		mu:     sync.RWMutex{},
 	}
 	return c, nil
 }
@@ -66,7 +68,7 @@ func (c *Client) End() {
 	c.mu.Unlock()
 
 	c.conn.Close()
-	close(c.send)
+	close(c.sendCh)
 
 	if c.HandleClose != nil {
 		c.HandleClose(c)
@@ -91,31 +93,24 @@ func (c *Client) listener() {
 }
 
 func (c *Client) writer() {
-	for p := range c.send {
-		switch p.Type {
-		case TextMessage:
-			c.conn.WriteMessage(websocket.TextMessage, p.Data)
-		case BinaryMessage:
-			c.conn.WriteMessage(websocket.BinaryMessage, p.Data)
-			// unsoppurted messages types are not sent
-		}
+	for p := range c.sendCh {
+		c.conn.WriteMessage(p.Type, p.Data)
 	}
 }
 
 // Begins receiving from and writing to the connection. Takes an optional first message parameter.
 // The message is sent before the client starts listening and accepting writing to the connection.
-// Useful for performing an action before other messages can be sent and received. ex. sending an initial control message.
 func (c *Client) Start(p *Packet) {
 	if c.open {
+		// already opened
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	go c.listener()
 	go c.writer()
-	// send initial
 	if p != nil {
-		c.send <- p
+		c.sendCh <- p
 	}
 	c.open = true
 }
@@ -126,7 +121,7 @@ func (c *Client) Send(p *Packet) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.open {
-		c.send <- p
+		c.sendCh <- p
 		return nil
 	}
 	return errors.New("client has been closed")

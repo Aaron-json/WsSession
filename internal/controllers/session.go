@@ -15,6 +15,7 @@ import (
 )
 
 type HandshakeMessage struct {
+	SessionName string   `json:"sessionName,omitempty"`
 	SessionCode string   `json:"sessionCode,omitempty"`
 	StatusCode  int      `json:"statusCode"`
 	Status      string   `json:"status"`
@@ -81,14 +82,13 @@ func CreateNewSession(w http.ResponseWriter, r *http.Request) {
 		c.End()
 		return
 	}
-	p := &client.Packet{
+	c.Start(&client.Packet{
 		Type: client.TextMessage,
 		Data: resJson,
-	}
-	c.Start(p)
+	})
 	if res.StatusCode != 200 {
 		// give user time to read the control message
-		time.Sleep(time.Second * 5)
+		time.Sleep(time.Second * 2)
 		c.End()
 	}
 }
@@ -124,6 +124,7 @@ func JoinSession(w http.ResponseWriter, r *http.Request) {
 			handshakeMsg.StatusCode = 200
 			handshakeMsg.Status = "Success"
 			handshakeMsg.Members = currentMembers
+			handshakeMsg.SessionName = ses.Name
 		}
 		ses.mu.Unlock()
 	}
@@ -133,21 +134,20 @@ func JoinSession(w http.ResponseWriter, r *http.Request) {
 		c.End()
 		return
 	}
-	p := &client.Packet{
+	c.Start(&client.Packet{
 		Type: client.TextMessage,
 		Data: resJson,
-	}
-	c.Start(p)
+	})
 	if handshakeMsg.StatusCode != 200 {
-		time.Sleep(time.Second * 5)
+		// close connection after timeout if error occured
+		time.Sleep(time.Second * 2)
 		c.End()
 		return
 	}
-	controlMsg := ControlMessage{
+	BroadcastJSON(newMember, &ControlMessage{
 		Control: MEMBER_JOINED,
 		From:    newMember.Id,
-	}
-	BroadcastText(newMember, &controlMsg)
+	})
 }
 
 func RemoveMemberFromSession(mem Member) error {
@@ -176,7 +176,7 @@ func HandleClientClose(mem Member) error {
 		From:    mem.Id,
 		Control: MEMBER_LEFT,
 	}
-	BroadcastText(mem, &msg)
+	BroadcastJSON(mem, &msg)
 	return nil
 }
 
@@ -208,11 +208,11 @@ func NewMember(ses *Session, c *client.Client) Member {
 }
 
 // Gets the ids of the members in a session. Synchronisation is left up to the
-// caller.
+// caller/.
 func getMemberIds(ses *Session) []string {
-	memberIds := make([]string, 0, len(ses.Members))
-	for _, member := range ses.Members {
-		memberIds = append(memberIds, member.Id)
+	memberIds := make([]string, len(ses.Members))
+	for i := range len(ses.Members) {
+		memberIds[i] = ses.Members[i].Id
 	}
 	return memberIds
 }
